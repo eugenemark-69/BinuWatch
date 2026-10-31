@@ -1,10 +1,98 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:geolocator/geolocator.dart';
 
-// Approximate location (Naval, Biliran area). Change to the drying site.
-const double _lat = 11.56;
-const double _lon = 124.40;
+// Used only when GPS is unavailable: roughly the middle of Biliran province.
+const double _fallbackLat = 11.56;
+const double _fallbackLon = 124.40;
+
+class PlaceInfo {
+  final double lat;
+  final double lon;
+  final bool fromGps;
+  PlaceInfo(this.lat, this.lon, this.fromGps);
+}
+
+// Tries the phone's location; falls back to the middle of Biliran.
+Future<PlaceInfo> getPlace() async {
+  try {
+    if (!await Geolocator.isLocationServiceEnabled()) throw 'GPS is off';
+
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
+      throw 'No location permission';
+    }
+
+    final pos = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.low, // rough is enough for weather
+        timeLimit: Duration(seconds: 15),
+      ),
+    );
+    return PlaceInfo(pos.latitude, pos.longitude, true);
+  } catch (_) {
+    // Try the last position the phone remembers before giving up.
+    try {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) return PlaceInfo(last.latitude, last.longitude, true);
+    } catch (_) {}
+    return PlaceInfo(_fallbackLat, _fallbackLon, false);
+  }
+}
+
+// Turns coordinates into a readable name like "Barangay, Town, Province"
+// using OpenStreetMap's free Nominatim service. Returns '' on any failure
+// (no internet, slow server, unknown place), so the screen falls back to
+// showing the coordinates only.
+Future<String> placeName(double lat, double lon) async {
+  try {
+    final uri = Uri.https('nominatim.openstreetmap.org', '/reverse', {
+      'format': 'jsonv2',
+      'lat': '$lat',
+      'lon': '$lon',
+      'zoom': '14',
+      'addressdetails': '1',
+      'accept-language': 'en',
+    });
+    final res = await http.get(uri, headers: {
+      // Nominatim's usage policy requires an identifying User-Agent.
+      'User-Agent': 'BinuwadApp/1.0 (student rice-drying project)',
+    }).timeout(const Duration(seconds: 8));
+    if (res.statusCode != 200) return '';
+
+    final json = jsonDecode(res.body) as Map<String, dynamic>;
+    final a = (json['address'] as Map<String, dynamic>?) ?? {};
+
+    String pick(List<String> keys) {
+      for (final k in keys) {
+        final v = (a[k] as String?)?.trim() ?? '';
+        if (v.isNotEmpty) return v;
+      }
+      return '';
+    }
+
+    final parts = <String>[];
+    for (final s in [
+      pick(['suburb', 'village', 'neighbourhood', 'hamlet']),
+      pick(['city', 'town', 'municipality']),
+      pick(['county', 'state_district', 'province']),
+    ]) {
+      if (s.isNotEmpty && !parts.contains(s)) parts.add(s);
+    }
+    if (parts.isEmpty) {
+      final s = pick(['state']);
+      if (s.isNotEmpty) parts.add(s);
+    }
+    return parts.join(', ');
+  } catch (_) {
+    return '';
+  }
+}
 
 enum DryingAdvice { good, caution, avoid }
 
@@ -23,7 +111,7 @@ class HourSlot {
 }
 
 class WeatherData {
-  final DateTime now;
+  final DateTime now; // current time AT THE FORECAST LOCATION
   final double temperature;
   final int humidity;
   final double precipitation; // mm falling right now
@@ -31,6 +119,10 @@ class WeatherData {
   final int cloudCover;
   final List<HourSlot> hours; // starts at the current hour
   final DateTime sunset;
+  final String timezone; // e.g. Asia/Manila
+  final double lat;
+  final double lon;
+  String placeName; // filled in after the weather loads
 
   WeatherData({
     required this.now,
@@ -41,6 +133,10 @@ class WeatherData {
     required this.cloudCover,
     required this.hours,
     required this.sunset,
+    required this.timezone,
+    required this.lat,
+    required this.lon,
+    this.placeName = '',
   });
 
   // Highest rain chance over the next 3 hours.
@@ -89,6 +185,16 @@ String _clock(DateTime t) {
   return '$h:$m ${t.hour < 12 ? 'AM' : 'PM'}';
 }
 
+// Example: "Fri, Oct 30, 2:15 PM"
+String _dateTime(DateTime t) {
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+  return '${days[t.weekday - 1]}, ${months[t.month - 1]} ${t.day}, ${_clock(t)}';
+}
+
 String rainOutlook(WeatherData w) {
   if (w.precipitation > 0) return 'It is raining now.';
   final i = w.hours.indexWhere((h) => h.rainChance >= 50);
@@ -107,10 +213,10 @@ String daylightLeft(WeatherData w) {
       '(${left.inHours}h ${left.inMinutes % 60}m of daylight left).';
 }
 
-Future<WeatherData> fetchWeather() async {
+Future<WeatherData> fetchWeather(double lat, double lon) async {
   final uri = Uri.https('api.open-meteo.com', '/v1/forecast', {
-    'latitude': '$_lat',
-    'longitude': '$_lon',
+    'latitude': '$lat',
+    'longitude': '$lon',
     'current':
     'temperature_2m,relative_humidity_2m,precipitation,cloud_cover,wind_speed_10m',
     'hourly': 'precipitation_probability,temperature_2m,cloud_cover',
@@ -159,6 +265,9 @@ Future<WeatherData> fetchWeather() async {
     cloudCover: (current['cloud_cover'] as num).toInt(),
     hours: slots.sublist(start, end),
     sunset: DateTime.parse((daily['sunset'] as List).first as String),
+    timezone: (json['timezone'] as String?) ?? 'unknown',
+    lat: lat,
+    lon: lon,
   );
 }
 
@@ -171,14 +280,26 @@ class WeatherScreen extends StatefulWidget {
 
 class _WeatherScreenState extends State<WeatherScreen> {
   late Future<WeatherData> _future;
+  bool _usingGps = false;
+
+  Future<WeatherData> _load() async {
+    final place = await getPlace();
+    if (mounted) setState(() => _usingGps = place.fromGps);
+
+    // Look up the place name while the weather downloads.
+    final nameFuture = placeName(place.lat, place.lon);
+    final weather = await fetchWeather(place.lat, place.lon);
+    weather.placeName = await nameFuture;
+    return weather;
+  }
 
   @override
   void initState() {
     super.initState();
-    _future = fetchWeather();
+    _future = _load();
   }
 
-  void _refresh() => setState(() => _future = fetchWeather());
+  void _refresh() => setState(() => _future = _load());
 
   @override
   Widget build(BuildContext context) {
@@ -211,6 +332,71 @@ class _WeatherScreenState extends State<WeatherScreen> {
     );
   }
 
+  // Date, time and location of the forecast, with a warning if the forecast
+  // location's clock disagrees with the phone's clock.
+  Widget _buildWhereWhen(WeatherData w) {
+    final phoneNow = DateTime.now();
+    final mismatch = phoneNow.difference(w.now).abs() > const Duration(hours: 1);
+
+    final name = w.placeName.isNotEmpty
+        ? w.placeName
+        : '${w.lat.toStringAsFixed(3)}, ${w.lon.toStringAsFixed(3)}';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.place),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _usingGps ? name : 'Approximate Biliran ($name)',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.only(left: 32),
+              child: Text(
+                '${w.lat.toStringAsFixed(3)}, ${w.lon.toStringAsFixed(3)}'
+                    '  |  ${w.timezone}',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(children: [
+              const Icon(Icons.calendar_today),
+              const SizedBox(width: 8),
+              Expanded(child: Text(_dateTime(w.now))),
+            ]),
+            if (mismatch) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Warning: the forecast location says it is ${_clock(w.now)}, '
+                      'but your phone clock says ${_clock(phoneNow)}. '
+                      'The forecast may be for a different place than where you are. '
+                      'On an emulator, set its location under Extended controls.',
+                  style: const TextStyle(color: Colors.black87),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildContent(WeatherData w) {
     final advice = adviceFor(w);
 
@@ -226,6 +412,9 @@ class _WeatherScreenState extends State<WeatherScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Where and when
+          _buildWhereWhen(w),
+
           // Advice + reasons
           Card(
             color: color,
@@ -319,7 +508,14 @@ class _WeatherScreenState extends State<WeatherScreen> {
               label: 'Cloud cover',
               value: '${w.cloudCover}%'),
           const SizedBox(height: 8),
-          const Center(child: Text('Pull down to refresh')),
+          Center(
+            child: Text(
+              _usingGps
+                  ? 'Using your phone location. Pull down to refresh.'
+                  : 'GPS unavailable: using approximate Biliran location.',
+              textAlign: TextAlign.center,
+            ),
+          ),
         ],
       ),
     );
