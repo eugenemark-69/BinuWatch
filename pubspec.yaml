@@ -39,7 +39,7 @@ dependencies:
   http: ^1.6.0
   ultralytics_yolo: ^0.7.1
   audioplayers: ^6.8.1
-
+  geolocator: ^14.0.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
