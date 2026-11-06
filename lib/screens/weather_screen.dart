@@ -185,6 +185,14 @@ String _clock(DateTime t) {
   return '$h:$m ${t.hour < 12 ? 'AM' : 'PM'}';
 }
 
+// Example: "2:15:42 PM" (seconds make every refresh visibly different)
+String _clockSeconds(DateTime t) {
+  final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+  final m = t.minute.toString().padLeft(2, '0');
+  final s = t.second.toString().padLeft(2, '0');
+  return '$h:$m:$s ${t.hour < 12 ? 'AM' : 'PM'}';
+}
+
 // Example: "Fri, Oct 30, 2:15 PM"
 String _dateTime(DateTime t) {
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -279,57 +287,88 @@ class WeatherScreen extends StatefulWidget {
 }
 
 class _WeatherScreenState extends State<WeatherScreen> {
-  late Future<WeatherData> _future;
+  WeatherData? _data; // last successfully loaded weather
+  DateTime? _checkedAt; // phone time of the last successful load
   bool _usingGps = false;
-
-  Future<WeatherData> _load() async {
-    final place = await getPlace();
-    if (mounted) setState(() => _usingGps = place.fromGps);
-
-    // Look up the place name while the weather downloads.
-    final nameFuture = placeName(place.lat, place.lon);
-    final weather = await fetchWeather(place.lat, place.lon);
-    weather.placeName = await nameFuture;
-    return weather;
-  }
+  bool _refreshing = false;
+  String? _error; // only used when the very first load fails
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _load();
   }
 
-  void _refresh() => setState(() => _future = _load());
+  // Gets location, weather and place name. Keeps showing the old data if a
+  // refresh fails (for example when the signal drops).
+  Future<void> _load() async {
+    try {
+      final place = await getPlace();
+
+      // Look up the place name while the weather downloads.
+      final nameFuture = placeName(place.lat, place.lon);
+      final weather = await fetchWeather(place.lat, place.lon);
+      weather.placeName = await nameFuture;
+
+      if (!mounted) return;
+      setState(() {
+        _data = weather;
+        _usingGps = place.fromGps;
+        _checkedAt = DateTime.now();
+        _error = null;
+      });
+    } catch (e) {
+      debugPrint('Weather load error: $e');
+      if (!mounted) return;
+      if (_data == null) {
+        setState(() => _error = 'Could not load weather.\nCheck your internet.');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Could not refresh. Showing the last data.')),
+        );
+      }
+    }
+  }
+
+  // Used by pull-down and by the refresh button. RefreshIndicator waits for
+  // this to finish, so its spinner stays until the new data has arrived.
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    await _load();
+    if (mounted) setState(() => _refreshing = false);
+  }
+
+  // Retry after the very first load failed.
+  void _retry() {
+    setState(() => _error = null);
+    _load();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<WeatherData>(
-      future: _future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.cloud_off, size: 48),
-                  const SizedBox(height: 12),
-                  const Text('Could not load weather.\nCheck your internet.',
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 16),
-                  FilledButton(onPressed: _refresh, child: const Text('Retry')),
-                ],
-              ),
+    if (_data == null) {
+      if (_error != null) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cloud_off, size: 48),
+                const SizedBox(height: 12),
+                Text(_error!, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                FilledButton(onPressed: _retry, child: const Text('Retry')),
+              ],
             ),
-          );
-        }
-        return _buildContent(snapshot.data!);
-      },
-    );
+          ),
+        );
+      }
+      return const Center(child: CircularProgressIndicator());
+    }
+    return _buildContent(_data!);
   }
 
   // Date, time and location of the forecast, with a warning if the forecast
@@ -372,7 +411,31 @@ class _WeatherScreenState extends State<WeatherScreen> {
             Row(children: [
               const Icon(Icons.calendar_today),
               const SizedBox(width: 8),
-              Expanded(child: Text(_dateTime(w.now))),
+              Expanded(child: Text('Forecast data: ${_dateTime(w.now)}')),
+            ]),
+            const SizedBox(height: 6),
+            Row(children: [
+              const Icon(Icons.update),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(_checkedAt == null
+                    ? ''
+                    : 'Last checked: ${_clockSeconds(_checkedAt!)}'),
+              ),
+              _refreshing
+                  ? const Padding(
+                padding: EdgeInsets.all(12),
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+                  : IconButton(
+                onPressed: _refresh,
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh',
+              ),
             ]),
             if (mismatch) ...[
               const SizedBox(height: 10),
@@ -408,8 +471,10 @@ class _WeatherScreenState extends State<WeatherScreen> {
     };
 
     return RefreshIndicator(
-      onRefresh: () async => _refresh(),
+      onRefresh: _refresh,
       child: ListView(
+        // Lets the pull gesture work even when the content is short.
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(16),
         children: [
           // Where and when
