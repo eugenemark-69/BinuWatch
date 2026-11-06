@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "158277648523",
+    "project_id": "binuwad-ac209",
+    "storage_bucket": "binuwad-ac209.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:158277648523:android:590cef19dd544cf1efd48e",
+        "android_client_info": {
+          "package_name": "com.example.binuwad_v1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCCen2WuMEjK72v27xfpUOVAA_vfg5Azq4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

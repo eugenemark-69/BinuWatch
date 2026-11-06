@@ -1,13 +1,17 @@
-import 'notification_service.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'firebase_options.dart';
+import 'notification_service.dart';
 import 'screens/home_screen.dart';
-import 'screens/bird_screen.dart';
+import 'screens/monitor_hub_screen.dart';
 import 'screens/weather_screen.dart';
 import 'screens/timer_screen.dart';
 
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   await NotificationService.instance.init();
   runApp(const BinuwadApp());
 }
@@ -41,7 +45,7 @@ class _MainShellState extends State<MainShell> {
 
   final List<Widget> _screens = const [
     HomeScreen(),
-    BirdScreen(),
+    MonitorHubScreen(),
     WeatherScreen(),
     TimerScreen(),
   ];
