@@ -30,7 +30,7 @@ Future<PlaceInfo> getPlace() async {
 
     final pos = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.low, // rough is enough for weather
+        accuracy: LocationAccuracy.medium, // rough is enough for weather
         timeLimit: Duration(seconds: 15),
       ),
     );
@@ -45,17 +45,17 @@ Future<PlaceInfo> getPlace() async {
   }
 }
 
-// Turns coordinates into a readable name like "Barangay, Town, Province"
-// using OpenStreetMap's free Nominatim service. Returns '' on any failure
-// (no internet, slow server, unknown place), so the screen falls back to
-// showing the coordinates only.
+// Turns coordinates into the MUNICIPALITY name (for example Naval or
+// Almeria) using OpenStreetMap's free Nominatim service. Returns '' on any
+// failure (no internet, slow server, unknown place), so the screen falls back
+// to showing the coordinates only.
 Future<String> placeName(double lat, double lon) async {
   try {
     final uri = Uri.https('nominatim.openstreetmap.org', '/reverse', {
       'format': 'jsonv2',
       'lat': '$lat',
       'lon': '$lon',
-      'zoom': '14',
+      'zoom': '10', // town/city level, not barangay
       'addressdetails': '1',
       'accept-language': 'en',
     });
@@ -76,19 +76,17 @@ Future<String> placeName(double lat, double lon) async {
       return '';
     }
 
-    final parts = <String>[];
-    for (final s in [
-      pick(['suburb', 'village', 'neighbourhood', 'hamlet']),
-      pick(['city', 'town', 'municipality']),
-      pick(['county', 'state_district', 'province']),
-    ]) {
-      if (s.isNotEmpty && !parts.contains(s)) parts.add(s);
-    }
-    if (parts.isEmpty) {
-      final s = pick(['state']);
-      if (s.isNotEmpty) parts.add(s);
-    }
-    return parts.join(', ');
+    // Printed in the Run panel so we can check what OpenStreetMap returned.
+    debugPrint('Nominatim address: $a');
+
+    // Municipality only (for example Naval, Almeria), not the barangay.
+    var town = pick(['city', 'town', 'municipality']);
+    town = town.replaceFirst(
+        RegExp(r'^(Municipality|City|Town) of ', caseSensitive: false), '');
+    if (town.isNotEmpty) return town;
+
+    // Fallback: if no municipality is listed, show the province instead.
+    return pick(['county', 'state_district', 'province', 'state']);
   } catch (_) {
     return '';
   }
