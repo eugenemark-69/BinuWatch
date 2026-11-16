@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'firebase_options.dart';
 import 'notification_service.dart';
+import 'pairing_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/monitor_hub_screen.dart';
 import 'screens/weather_screen.dart';
@@ -13,6 +14,9 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   await NotificationService.instance.init();
+  // Not awaited on purpose: starts listening for alerts if this phone is a
+  // paired receiver, without delaying the app from opening.
+  PairingService.instance.startListening();
   runApp(const BinuwadApp());
 }
 

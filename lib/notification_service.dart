@@ -9,6 +9,10 @@ class NotificationService {
 
   final _plugin = FlutterLocalNotificationsPlugin();
 
+  // The turn-the-rice alarm always uses this id, so it can be cancelled
+  // without touching other notifications (like bird alerts).
+  static const int _turnAlarmId = 1;
+
   // New channel id on purpose: Android freezes a channel's sound/importance
   // after it is first created, so editing the old one would do nothing.
   static final _alarmDetails = NotificationDetails(
@@ -59,7 +63,7 @@ class NotificationService {
   Future<void> scheduleTurnReminder(Duration delay) async {
     await cancelAll();
     await _plugin.zonedSchedule(
-      id: 1,
+      id: _turnAlarmId,
       title: 'Binuwad: TURN THE RICE!',
       body: 'Time to turn (karaw) the rice. Tap to stop the alarm.',
       scheduledDate: tz.TZDateTime.now(tz.local).add(delay),
@@ -68,7 +72,9 @@ class NotificationService {
     );
   }
 
-  Future<void> stopAlarm() => _plugin.cancelAll();
+  Future<void> stopAlarm() => _plugin.cancel(id: _turnAlarmId);
 
-  Future<void> cancelAll() => _plugin.cancelAll();
+  // Despite the name, this only cancels the turn alarm. It used to clear every
+  // notification, which would also have removed bird alerts.
+  Future<void> cancelAll() => _plugin.cancel(id: _turnAlarmId);
 }
