@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "com.example.binuwad_v1"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

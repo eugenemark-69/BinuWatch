@@ -67,6 +67,7 @@ class _MonitorHubScreenState extends State<MonitorHubScreen> {
     });
     try {
       await PairingService.instance.joinPairing(_codeController.text);
+      await PairingService.instance.startListening();
       _enteringCode = false;
       _codeController.clear();
       await _loadSaved();
@@ -148,7 +149,7 @@ class _MonitorHubScreenState extends State<MonitorHubScreen> {
         final paired = doc.data()?['paired'] == true;
         return saved.role == PairRole.monitor
             ? _buildMonitorView(saved.code, paired)
-            : _buildReceiverView(paired);
+            : _buildReceiverView(saved.code, paired);
       },
     );
   }
@@ -160,10 +161,12 @@ class _MonitorHubScreenState extends State<MonitorHubScreen> {
       const Text('What will this phone do?',
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
       const SizedBox(height: 24),
+
+      // Works with or without pairing.
       SizedBox(
         width: double.infinity,
         child: FilledButton.icon(
-          onPressed: _busy ? null : _chooseMonitor,
+          onPressed: _busy ? null : _openCamera,
           icon: const Icon(Icons.videocam),
           label: const Padding(
             padding: EdgeInsets.symmetric(vertical: 14),
@@ -172,9 +175,31 @@ class _MonitorHubScreenState extends State<MonitorHubScreen> {
         ),
       ),
       const SizedBox(height: 4),
-      const Text('Leave this phone watching the rice.',
+      const Text('Watch the rice with this phone camera. No pairing needed.',
           textAlign: TextAlign.center),
-      const SizedBox(height: 24),
+
+      const SizedBox(height: 28),
+      const Text('Want alerts on another phone?',
+          style: TextStyle(fontWeight: FontWeight.bold)),
+      const SizedBox(height: 12),
+
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: _busy ? null : _chooseMonitor,
+          icon: const Icon(Icons.link),
+          label: const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text('Monitor and pair a phone',
+                style: TextStyle(fontSize: 16)),
+          ),
+        ),
+      ),
+      const SizedBox(height: 4),
+      const Text('Shows a code. Type it on the other phone.',
+          textAlign: TextAlign.center),
+
+      const SizedBox(height: 16),
       SizedBox(
         width: double.infinity,
         child: OutlinedButton.icon(
@@ -186,14 +211,16 @@ class _MonitorHubScreenState extends State<MonitorHubScreen> {
           }),
           icon: const Icon(Icons.notifications_active),
           label: const Padding(
-            padding: EdgeInsets.symmetric(vertical: 14),
-            child: Text('Receive notifications', style: TextStyle(fontSize: 18)),
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text('Receive notifications',
+                style: TextStyle(fontSize: 16)),
           ),
         ),
       ),
       const SizedBox(height: 4),
       const Text('Get alerts on this phone when a bird is seen.',
           textAlign: TextAlign.center),
+
       if (_busy) ...[
         const SizedBox(height: 24),
         const CircularProgressIndicator(),
@@ -267,6 +294,12 @@ class _MonitorHubScreenState extends State<MonitorHubScreen> {
         const SizedBox(height: 8),
         const Text('Waiting for the other phone...'),
         const SizedBox(height: 16),
+        FilledButton.icon(
+          onPressed: _openCamera,
+          icon: const Icon(Icons.videocam),
+          label: const Text('Open camera monitor'),
+        ),
+        const SizedBox(height: 8),
         OutlinedButton(onPressed: _unpair, child: const Text('Cancel')),
       ]);
     }
@@ -294,7 +327,7 @@ class _MonitorHubScreenState extends State<MonitorHubScreen> {
     ]);
   }
 
-  Widget _buildReceiverView(bool paired) {
+  Widget _buildReceiverView(String code, bool paired) {
     return _centered([
       Icon(
         paired ? Icons.notifications_active : Icons.hourglass_empty,
@@ -307,13 +340,69 @@ class _MonitorHubScreenState extends State<MonitorHubScreen> {
           style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
       const SizedBox(height: 8),
       const Text(
-        'You will get an alert here when a bird or chicken is detected.\n'
-            '(Alerts are added in the next step.)',
+        'You will get a notification here when a bird or chicken is detected.\n'
+            'Keep this app open or running in the background to receive alerts.',
         textAlign: TextAlign.center,
       ),
       const SizedBox(height: 24),
+      const Text('Recent alerts',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 8),
+      _buildAlertList(code),
+      const SizedBox(height: 16),
       TextButton(onPressed: _unpair, child: const Text('Unpair')),
     ]);
+  }
+
+  Widget _buildAlertList(String code) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: PairingService.instance.recentAlerts(code),
+      builder: (context, snap) {
+        if (snap.hasError) {
+          debugPrint('Alert list error: ${snap.error}');
+          return const Text('Could not load alerts.');
+        }
+        if (!snap.hasData) {
+          return const SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          );
+        }
+        final docs = snap.data!.docs;
+        if (docs.isEmpty) return const Text('No alerts yet.');
+
+        return SizedBox(
+          width: double.infinity,
+          child: Column(
+            children: [
+              for (final d in docs)
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.warning_amber),
+                  title: Text(
+                    '${_cap((d.data()['label'] as String?) ?? 'bird')} '
+                        '${(((d.data()['confidence'] as num?) ?? 0) * 100).round()}%',
+                  ),
+                  subtitle: Text(_timeOf(d.data()['createdAt'])),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  String _cap(String s) =>
+      s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+
+  String _timeOf(Object? v) {
+    if (v is! Timestamp) return 'just now';
+    final t = v.toDate();
+    final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    final m = t.minute.toString().padLeft(2, '0');
+    final s = t.second.toString().padLeft(2, '0');
+    return '$h:$m:$s ${t.hour < 12 ? 'AM' : 'PM'}';
   }
 
   // ---------- Helpers ----------
