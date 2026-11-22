@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'app_state.dart';
 import 'bird_alert_notifier.dart';
 
 enum PairRole { monitor, receiver }
@@ -133,6 +134,7 @@ class PairingService {
     final p = await SharedPreferences.getInstance();
     await p.remove(_roleKey);
     await p.remove(_codeKey);
+    AppState.instance.setPairing(null);
   }
 
   // ---------- Alerts ----------
@@ -196,6 +198,7 @@ class PairingService {
         if (change.type != DocumentChangeType.added) continue;
         final d = change.doc.data();
         if (d == null) continue;
+        AppState.instance.recordAlertReceived((d['label'] as String?) ?? 'bird');
         BirdAlertNotifier.instance.show(
           label: (d['label'] as String?) ?? 'bird',
           confidence: (d['confidence'] as num?)?.toDouble() ?? 0,
@@ -221,6 +224,7 @@ class PairingService {
     final p = await SharedPreferences.getInstance();
     await p.setString(_roleKey, role.name);
     await p.setString(_codeKey, code);
+    AppState.instance.setPairing(role.name);
   }
 
   Future<SavedPairing?> loadSaved() async {

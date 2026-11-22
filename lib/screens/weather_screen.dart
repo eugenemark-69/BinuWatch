@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:geolocator/geolocator.dart';
+import '../app_state.dart';
 
 // Used only when GPS is unavailable: roughly the middle of Biliran province.
 const double _fallbackLat = 11.56;
@@ -30,7 +31,7 @@ Future<PlaceInfo> getPlace() async {
 
     final pos = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.medium, // rough is enough for weather
+        accuracy: LocationAccuracy.low, // rough is enough for weather
         timeLimit: Duration(seconds: 15),
       ),
     );
@@ -315,6 +316,20 @@ class _WeatherScreenState extends State<WeatherScreen> {
         _checkedAt = DateTime.now();
         _error = null;
       });
+
+      // Share the result with the Home screen.
+      AppState.instance.setWeather(
+        advice: switch (adviceFor(weather)) {
+          DryingAdvice.good => AdviceLevel.good,
+          DryingAdvice.caution => AdviceLevel.caution,
+          DryingAdvice.avoid => AdviceLevel.avoid,
+        },
+        reason: reasonsFor(weather).first,
+        place: weather.placeName.isNotEmpty
+            ? weather.placeName
+            : '${weather.lat.toStringAsFixed(2)}, ${weather.lon.toStringAsFixed(2)}',
+        checkedAt: DateTime.now(),
+      );
     } catch (e) {
       debugPrint('Weather load error: $e');
       if (!mounted) return;
